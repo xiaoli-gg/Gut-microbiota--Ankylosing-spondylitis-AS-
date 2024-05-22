@@ -1,0 +1,49 @@
+#######aspera批量下载sra数据############（下载的时候意外中断，会直接跳过已下载的）
+nohup ascp -i /home/gg/.aspera/connect/etc/asperaweb_id_dsa.openssh \
+-l 300M \
+-T \
+-P 33001 \
+-k 1 \
+--mode recv \
+--host fasp.sra.ebi.ac.uk \
+--user era-fasp \
+--file-list retry_download.list . > nohup_ascp_retyr2_output.log 2>&1 &
+
+运行以上脚本有两个前提：ascp在环境变量中export PATH="/home/gg/.aspera/connect/bin:$PATH"  ;   将路径修改为你要下载的文件夹。
+
+#########并行运算###########
+####并行运算-kneaddata####
+#运行parallel时，要将Windows下的.txt格式转换为Unix下的.txt格式，去除额外的 \r 字符。
+sed -i 's/\r$//' /home/gg/data_orig/srr_list.txt  
+
+nohup parallel -j 3 --link --xapply --plus  --regexp 'kneaddata -i1 /home/gg/data_orig/{}_1.fastq.gz -i2 /home/gg/data_orig/{}_2.fastq.gz \
+--trimmomatic /home/gg/Tool_app/Trimmomatic-0.39/ \
+-o /home/gg/data_kneaddate_output/ -v -t 6  \
+--trimmomatic-options "SLIDINGWINDOW:4:20 MINLEN:50 LEADING:3 TRAILING:3" --bypass-trf \
+--reorder --bowtie2-options "--very-sensitive --dovetail" \
+-db /home/gg/bowtie_index_hg37/ \
+--remove-intermediate-output' :::: /home/gg/data_orig/srr_list.txt > /home/gg/data_kneaddate_output/parallel_output.log 2>&1 &
+
+####并行运算-kraken2####
+nohup parallel -j 2 'kraken2 --db /home/gg/kraken_index_std --threads 9 --report-zero-counts --use-names \
+    --report /home/gg/data_kraken2_output/kreports/{}_std_k2report \
+    --paired /home/gg/data_kneaddate_output/{}_1_kneaddata_paired_1.fastq /home/gg/data_kneaddate_output/{}_1_kneaddata_paired_2.fastq \
+    > /home/gg/data_kraken2_output/kraken_outputs/{}_std.kraken2' :::: /home/gg/data_orig/srr_list.txt > /home/gg/data_kraken2_output/kraken_outputs/parallel_output.log 2>&1 &
+
+####并行运算-bracken####
+nohup parallel -j 2 'bracken -d /home/gg/kraken_index_std \
+        -i /home/gg/data_kraken2_output/kreports/{}_std_k2report \
+        -r 100 \
+        -l S \
+        -t 0 \
+        -o /home/gg/data_kraken2_output/bracken_outputs/{}_std_t0.bracken \
+        -w /home/gg/data_kraken2_output/breports/{}_std_t0.breport'  :::: /home/gg/data_orig/srr_list.txt > /home/gg/data_kraken2_output/bracken_outputs/parallel_output.log 2>&1 &
+
+###并行绘制Krona图
+nohup parallel -j 2 'python /home/gg/Tool_app/KrakenTools-1.2/kreport2krona.py -r /home/gg/data_kraken2_output/breports/{}.breport \
+-o /home/gg/data_kraken2_output/b_krona_txt/{}.b.krona.txt --no-intermediate-ranks'  :::: /home/gg/data_orig/only_4.txt > /home/gg/data_kraken2_output/b_krona_txt/parallel_output.log 2>&1 &
+
+ktImportText /home/gg/data_kraken2_output/b_krona_txt/ERR2843542.b.krona.txt -o /home/gg/data_kraken2_output/krona_html/ERR2843542.krona.html
+
+####绘制pavin图
+https://fbreitwieser.shinyapps.io/pavian/
